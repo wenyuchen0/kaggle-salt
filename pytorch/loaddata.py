@@ -1,9 +1,3 @@
-
-# coding: utf-8
-
-# In[1]:
-
-
 import os
 import torch
 import pandas as pd
@@ -17,9 +11,6 @@ import cv2
 from pathlib import Path
 from torch.nn import functional as F
 import torch.nn as nn
-
-
-# In[2]:
 
 
 def load_image(path):
@@ -41,8 +32,6 @@ def show_fig(dataset,i):
         fig,ax1 = plt.subplots(1, 1, figsize=(15,5))
         ax1.imshow(a,cmap='Greys',  interpolation='nearest')
 
-
-# In[3]:
 
 
 # from disscusion at https://www.kaggle.com/c/tgs-salt-identification-challenge/discussion/63984#382657
@@ -70,9 +59,6 @@ def get_mask_type(mask):
         return 6
     else:
         return 7
-
-
-# In[4]:
 
 
 class SaltIdentification(Dataset):
