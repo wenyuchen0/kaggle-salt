@@ -1,18 +1,8 @@
 
-# coding: utf-8
-
-# In[136]:
-
-
 import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-
-
-# # model
-
-# In[137]:
 
 
 def same_padding(input, kernel_size = 3, stride= 1):
@@ -30,24 +20,22 @@ def same_padding(input, kernel_size = 3, stride= 1):
     return F.pad(input, [padding[1]//2, padding[1]//2, padding[0]//2, padding[0]//2])
 
 
-# In[138]:
-
-
 class ResidualBlock(nn.Module):
     def __init__(self,in_ch, out_ch, r = 4):
         # radio of the senet
         super(ResidualBlock, self).__init__()
-        self.conv = nn.Conv2d(in_ch,in_ch, 3)
-        self.bn = nn.BatchNorm2d(in_ch)
+        self.conv = nn.Conv2d(in_ch,in_ch, 3, padding = 1)
+        self.bn = nn.BatchNorm2d(in_ch, track_running_stats=False)
+        self.abn = ActivatedBatchNorm(in_ch)
         self.globalpool = nn.AdaptiveAvgPool2d(1)
         self.fc1 = nn.Linear(in_ch, in_ch//r)
         self.fc2 = nn.Linear(in_ch//r, in_ch)
         
-    def forward(self, input_block , combine = "add", dropout_ratio = 0, use_senet = True,activation = False):
+    def forward(self, input_block, dropout_ratio = 0, use_senet = True,activation = False):
         x = self.bn(F.relu(input_block))
-        x = self.conv(same_padding(x))
-        x = F.dropout2d(x, dropout_ratio)
-        x = self.conv(same_padding(x))
+        x = self.conv(x)
+        x = F.dropout2d(x, dropout_ratio, training = self.training)
+        x = self.conv(x)
         x = self.bn(F.relu(x))
         # SEnet layer
         if use_senet:
@@ -57,65 +45,56 @@ class ResidualBlock(nn.Module):
             se = torch.sigmoid(self.fc2(se))
             se = se.view(*se.size(),1,1)
             x = x*se
-        if combine == "add":
-            x.add_(input_block)
-        if combine == "cat":
-            x = torch.cat((x,input_block), dim = 1)
+        x.add_(input_block)
         if activation:
             x = self.bn(F.relu(x))
         return x
 
-
-# In[139]:
-
-
 class Down(nn.Module):
     def __init__(self, in_ch, out_ch,r = 4):
         super(Down, self).__init__()
-        self.conv = nn.Conv2d(in_ch, out_ch ,3)
+        self.conv = nn.Conv2d(in_ch, out_ch ,3, padding = 1)
         self.res  = ResidualBlock(out_ch, out_ch,r)
         self.pool = nn.MaxPool2d(2)
     
     def forward(self,input_layer,dropout_ratio = 0.5):
-        u_layer =  self.conv(same_padding(input_layer))
+        u_layer =  self.conv(input_layer)
         u_layer = self.res(u_layer, activation = False)
         u_layer = self.res(u_layer, activation = True)
-        down_layer = F.dropout2d(self.pool(u_layer), dropout_ratio)
+        down_layer = F.dropout2d(self.pool(u_layer), dropout_ratio, training = self.training)
         return u_layer, down_layer
 
 class Mid(nn.Module):
     def __init__(self, in_ch, out_ch,r = 4):
         super(Mid, self).__init__()
-        self.conv = nn.Conv2d(in_ch, out_ch ,3)
+        self.conv = nn.Conv2d(in_ch, out_ch ,3, padding = 1)
         self.res1  = ResidualBlock(out_ch, out_ch,r )
         self.res2  = ResidualBlock(out_ch, out_ch,r )
     
     def forward(self,x, dropout_ratio = 0.5):
-        x = self.conv(same_padding(x))
+        x = self.conv(x)
         x = self.res1(x, activation = False)
         x = self.res2(x, activation = True)
         return x
     
-
+# design deconv layer according to https://distill.pub/2016/deconv-checkerboard/
 class Up(nn.Module):
-    def __init__(self, in_ch, out_ch, padding = 0, output_padding = 0,r = 4):
+    def __init__(self, in_ch, out_ch,r = 4):
         super(Up, self).__init__()
-        self.deconv = nn.ConvTranspose2d(in_ch, out_ch, 3,stride=2, padding = padding, output_padding = output_padding)
-        self.conv = nn.Conv2d(out_ch * 2, out_ch, 3)
+        self.deconv = nn.ConvTranspose2d(in_ch, out_ch, 4,stride = 2, padding = 1)
+        self.conv = nn.Conv2d(out_ch * 2, out_ch, 3, padding = 1)
         self.res = ResidualBlock(out_ch, out_ch, r)
         self.pool = nn.MaxPool2d(2)
         
     def forward(self, u_layer, x,dropout_ratio = 0.5):
         x = self.deconv(x)
+        x = F.interpolate(x, size = u_layer.size()[-1],mode = 'nearest')
         x = torch.cat((x,u_layer), dim = 1)
-        x = F.dropout2d(x, dropout_ratio)
-        x = self.conv(same_padding(x))
+        x = F.dropout2d(x, dropout_ratio, training = self.training)
+        x = self.conv(x)
         x = self.res(x, activation = False)
         x = self.res(x, activation = True)
         return x
-
-
-# In[140]:
 
 
 class UNet(nn.Module):
@@ -126,10 +105,10 @@ class UNet(nn.Module):
         self.down3 = Down(start_filters * 2, start_filters * 4, r)
         self.down4 = Down(start_filters * 4, start_filters * 8, r)
         self.mid = Mid(start_filters * 8, start_filters *16, r)
-        self.up4 = Up(start_filters * 16, start_filters * 8, 1 , 1, r) 
-        self.up3 = Up(start_filters * 8, start_filters * 4, 0, 0, r) 
-        self.up2 = Up(start_filters * 4, start_filters * 2, 1, 1, r) 
-        self.up1 = Up(start_filters * 2, start_filters * 1, 0, 0, r) 
+        self.up4 = Up(start_filters * 16, start_filters * 8, r) 
+        self.up3 = Up(start_filters * 8, start_filters * 4, r) 
+        self.up2 = Up(start_filters * 4, start_filters * 2, r) 
+        self.up1 = Up(start_filters * 2, start_filters * 1, r) 
         self.out = nn.Conv2d(start_filters * 1, 1, 1)
         
     def forward(self,input_layer):
@@ -146,4 +125,3 @@ class UNet(nn.Module):
         up_layer1 = self.up1(u_layer1, up_layer2)
         out_layer = self.out(up_layer1)
         return  out_layer
-
