@@ -104,7 +104,7 @@ class SaltIdentification(Dataset):
             return image.view(-1,*img_size)
 
         
-# saved in the file
+# save the dataset
 # data.train_df["coverage_class"] = [0] * len(data.train_df)
 # for i in tqdm(range(len(data.train_df))):
 #     data.train_df.coverage_class[i] = get_mask_type(data[i][1])
